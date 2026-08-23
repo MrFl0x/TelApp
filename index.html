@@ -1,0 +1,743 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+<meta name="color-scheme" content="light dark" />
+<title>Анкета сожителя</title>
+
+<!-- Telegram Mini Apps SDK. Должен подключаться до нашего скрипта,
+     чтобы объект window.Telegram.WebApp уже существовал. -->
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+
+<style>
+  /* ============================================================
+     Базовые цвета берём из тем Telegram (--tg-theme-*).
+     Telegram сам прокидывает эти CSS-переменные в WebView.
+     Если открыть страницу вне Telegram (в обычном браузере) —
+     сработают значения по умолчанию после запятой (fallback).
+     ============================================================ */
+  :root {
+    --bg: var(--tg-theme-bg-color, #ffffff);
+    --secondary-bg: var(--tg-theme-secondary-bg-color, #f0f0f3);
+    --text: var(--tg-theme-text-color, #1c1c1e);
+    --hint: var(--tg-theme-hint-color, #8e8e93);
+    --link: var(--tg-theme-link-color, #2481cc);
+    --button: var(--tg-theme-button-color, #2481cc);
+    --button-text: var(--tg-theme-button-text-color, #ffffff);
+    --destructive: var(--tg-theme-destructive-text-color, #ff3b30);
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    /* На мобильных не даём странице скроллиться вбок */
+    overflow-x: hidden;
+  }
+
+  .app {
+    max-width: 480px;
+    margin: 0 auto;
+    padding: 16px 16px 120px; /* снизу отступ под MainButton Telegram */
+  }
+
+  header.app-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 0 20px;
+  }
+  header.app-header .icon { font-size: 32px; }
+  header.app-header h1 { font-size: 20px; margin: 0; }
+  header.app-header p { margin: 2px 0 0; font-size: 13px; color: var(--hint); }
+
+  /* Карточка-секция формы */
+  .section {
+    background: var(--secondary-bg);
+    border-radius: 14px;
+    padding: 16px;
+    margin-bottom: 14px;
+  }
+  .section h2 {
+    font-size: 15px;
+    margin: 0 0 12px;
+    color: var(--hint);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+
+  .field { margin-bottom: 14px; }
+  .field:last-child { margin-bottom: 0; }
+
+  .field label.field-label {
+    display: block;
+    font-size: 14px;
+    font-weight: 500;
+    margin-bottom: 6px;
+  }
+  .req { color: var(--destructive); }
+
+  input[type="text"],
+  input[type="number"],
+  select,
+  textarea {
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid rgba(142, 142, 147, 0.35);
+    background: var(--bg);
+    color: var(--text);
+    font-size: 15px;
+    font-family: inherit;
+    outline: none;
+  }
+  input[type="text"]:focus,
+  input[type="number"]:focus,
+  select:focus,
+  textarea:focus {
+    border-color: var(--link);
+  }
+  textarea { resize: vertical; min-height: 80px; }
+
+  .field-row {
+    display: flex;
+    gap: 10px;
+  }
+  .field-row > div { flex: 1; }
+
+  .char-counter {
+    text-align: right;
+    font-size: 12px;
+    color: var(--hint);
+    margin-top: 4px;
+  }
+
+  /* Группа радио-кнопок в виде "пилюль" */
+  .pill-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .pill-group input[type="radio"] {
+    /* прячем нативный кружок, но оставляем input доступным для скринридеров/клавиатуры */
+    position: absolute;
+    opacity: 0;
+    width: 1px;
+    height: 1px;
+  }
+  .pill-group label {
+    padding: 9px 14px;
+    border-radius: 20px;
+    border: 1px solid rgba(142, 142, 147, 0.35);
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .pill-group input[type="radio"]:checked + label {
+    background: var(--button);
+    color: var(--button-text);
+    border-color: var(--button);
+  }
+  .pill-group input[type="radio"]:focus-visible + label {
+    outline: 2px solid var(--link);
+    outline-offset: 2px;
+  }
+
+  .field-error {
+    display: block;
+    color: var(--destructive);
+    font-size: 12px;
+    margin-top: 6px;
+    min-height: 14px;
+  }
+
+  .field-hint {
+    font-size: 12px;
+    color: var(--hint);
+    margin: -6px 0 10px;
+  }
+
+  /* ---------- Фотографии ---------- */
+  .photo-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .photo-thumb {
+    position: relative;
+    width: 84px;
+    height: 84px;
+    border-radius: 12px;
+    overflow: hidden;
+    background: var(--bg);
+  }
+  .photo-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  .photo-thumb .remove-btn {
+    position: absolute;
+    top: 3px;
+    right: 3px;
+    width: 20px;
+    height: 20px;
+    border: none;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.6);
+    color: #fff;
+    font-size: 13px;
+    line-height: 20px;
+    text-align: center;
+    padding: 0;
+    cursor: pointer;
+  }
+  .photo-add {
+    width: 84px;
+    height: 84px;
+    border-radius: 12px;
+    border: 2px dashed rgba(142, 142, 147, 0.5);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: var(--hint);
+    cursor: pointer;
+    font-size: 12px;
+    gap: 2px;
+  }
+  .photo-add .plus { font-size: 22px; line-height: 1; }
+  .photo-add.is-disabled {
+    opacity: 0.4;
+    pointer-events: none;
+  }
+
+  /* ---------- Экран успеха ---------- */
+  .success-box {
+    background: var(--secondary-bg);
+    border-radius: 14px;
+    padding: 24px 16px;
+    text-align: center;
+  }
+  .success-box .emoji { font-size: 40px; margin-bottom: 8px; }
+  .success-box h2 { margin: 0 0 8px; font-size: 18px; }
+  .success-box p { margin: 0; color: var(--hint); font-size: 14px; }
+</style>
+</head>
+<body>
+
+<div class="app">
+
+  <header class="app-header">
+    <span class="icon">🏠</span>
+    <div>
+      <h1>Анкета сожителя</h1>
+      <p>Заполните анкету, чтобы найти подходящего сожителя</p>
+    </div>
+  </header>
+
+  <!-- Сама форма. novalidate — отключаем встроенную валидацию браузера,
+       проверять поля будем сами в JS, чтобы полностью контролировать
+       текст ошибок и работу с Telegram.WebApp.MainButton. -->
+  <form id="form" novalidate>
+
+    <!-- ============== 1. ОБЩИЕ ПОЛЯ ============== -->
+    <section class="section">
+      <h2>Общая информация</h2>
+
+      <div class="field">
+        <label class="field-label" for="name">Имя <span class="req">*</span></label>
+        <input type="text" id="name" name="name" maxlength="40" placeholder="Например, Анна" />
+        <span class="field-error" data-error-for="name"></span>
+      </div>
+
+      <div class="field">
+        <label class="field-label" for="age">Возраст</label>
+        <input type="number" id="age" name="age" min="16" max="99" placeholder="Например, 20" />
+        <span class="field-error" data-error-for="age"></span>
+      </div>
+
+      <div class="field">
+        <label class="field-label">Тип жилья <span class="req">*</span></label>
+        <div class="pill-group" id="housingTypeGroup">
+          <input type="radio" name="housingType" id="housingDorm" value="dorm" />
+          <label for="housingDorm">Общежитие</label>
+
+          <input type="radio" name="housingType" id="housingApartment" value="apartment" />
+          <label for="housingApartment">Съёмная квартира</label>
+        </div>
+        <span class="field-error" data-error-for="housingType"></span>
+      </div>
+
+      <!-- Показывается только если выбрано "Общежитие" -->
+      <div class="field" id="dormField" hidden>
+        <label class="field-label" for="dormBuilding">Корпус / номер общежития <span class="req">*</span></label>
+        <input type="text" id="dormBuilding" name="dormBuilding" maxlength="30" placeholder="Например, корпус 3" />
+        <span class="field-error" data-error-for="dormBuilding"></span>
+      </div>
+
+      <!-- Показывается только если выбрано "Съёмная квартира" -->
+      <div class="field" id="apartmentField" hidden>
+        <label class="field-label" for="budget">Бюджет <span class="req">*</span></label>
+        <select id="budget" name="budget">
+          <option value="">Выберите диапазон</option>
+          <option value="0-15000">до 15 000 ₽</option>
+          <option value="15000-25000">15 000 – 25 000 ₽</option>
+          <option value="25000-40000">25 000 – 40 000 ₽</option>
+          <option value="40000+">от 40 000 ₽</option>
+        </select>
+        <span class="field-error" data-error-for="budget"></span>
+      </div>
+
+      <div class="field">
+        <label class="field-label" for="contact">Контакт для связи <span class="req">*</span></label>
+        <input type="text" id="contact" name="contact" maxlength="40" placeholder="@username" />
+        <span class="field-error" data-error-for="contact"></span>
+      </div>
+    </section>
+
+    <!-- ============== 2. ОБРАЗ ЖИЗНИ ============== -->
+    <section class="section">
+      <h2>Образ жизни</h2>
+
+      <div class="field">
+        <label class="field-label">Курение <span class="req">*</span></label>
+        <div class="pill-group">
+          <input type="radio" name="smoking" id="smokingYes" value="yes" />
+          <label for="smokingYes">Да</label>
+          <input type="radio" name="smoking" id="smokingNo" value="no" />
+          <label for="smokingNo">Нет</label>
+          <input type="radio" name="smoking" id="smokingSometimes" value="sometimes" />
+          <label for="smokingSometimes">Иногда</label>
+        </div>
+        <span class="field-error" data-error-for="smoking"></span>
+      </div>
+
+      <div class="field">
+        <label class="field-label">Режим сна <span class="req">*</span></label>
+        <div class="pill-group">
+          <input type="radio" name="sleepSchedule" id="sleepOwl" value="owl" />
+          <label for="sleepOwl">Сова 🌙</label>
+          <input type="radio" name="sleepSchedule" id="sleepLark" value="lark" />
+          <label for="sleepLark">Жаворонок 🌅</label>
+        </div>
+        <span class="field-error" data-error-for="sleepSchedule"></span>
+      </div>
+
+      <div class="field">
+        <label class="field-label">Гости <span class="req">*</span></label>
+        <div class="pill-group">
+          <input type="radio" name="guests" id="guestsOften" value="often" />
+          <label for="guestsOften">Часто</label>
+          <input type="radio" name="guests" id="guestsRarely" value="rarely" />
+          <label for="guestsRarely">Редко</label>
+          <input type="radio" name="guests" id="guestsNever" value="never" />
+          <label for="guestsNever">Никогда</label>
+        </div>
+        <span class="field-error" data-error-for="guests"></span>
+      </div>
+
+      <div class="field">
+        <label class="field-label">Чистота <span class="req">*</span></label>
+        <div class="pill-group">
+          <input type="radio" name="cleanliness" id="cleanlinessImportant" value="important" />
+          <label for="cleanlinessImportant">Важно</label>
+          <input type="radio" name="cleanliness" id="cleanlinessNotImportant" value="not_important" />
+          <label for="cleanlinessNotImportant">Не принципиально</label>
+        </div>
+        <span class="field-error" data-error-for="cleanliness"></span>
+      </div>
+    </section>
+
+    <!-- ============== 3. ФОТОГРАФИИ ============== -->
+    <section class="section">
+      <h2>Фотографии</h2>
+      <p class="field-hint">От 1 до 3 фото, до 5 МБ каждое.</p>
+
+      <div class="field">
+        <div class="photo-grid" id="photoGrid">
+          <label class="photo-add" id="photoAddBtn">
+            <span class="plus">+</span>
+            <span>Добавить</span>
+            <input type="file" id="photoInput" accept="image/*" multiple hidden />
+          </label>
+        </div>
+        <span class="field-error" data-error-for="photos"></span>
+      </div>
+    </section>
+
+    <!-- ============== 4. ДОПОЛНИТЕЛЬНО (необязательно) ============== -->
+    <section class="section">
+      <h2>Дополнительно</h2>
+
+      <div class="field">
+        <label class="field-label" for="phone">Номер телефона</label>
+        <input type="tel" id="phone" name="phone" maxlength="20" placeholder="+7 (___) ___-__-__ (необязательно)" />
+      </div>
+
+      <div class="field">
+        <label class="field-label" for="instagram">Instagram</label>
+        <input type="text" id="instagram" name="instagram" maxlength="40" placeholder="@username (необязательно)" />
+      </div>
+
+      <div class="field">
+        <label class="field-label" for="vk">ВКонтакте</label>
+        <input type="text" id="vk" name="vk" maxlength="60" placeholder="Ссылка или ID страницы (необязательно)" />
+      </div>
+
+      <div class="field">
+        <label class="field-label" for="whatsapp">WhatsApp</label>
+        <input type="text" id="whatsapp" name="whatsapp" maxlength="20" placeholder="Номер для WhatsApp (необязательно)" />
+      </div>
+
+      <div class="field">
+        <label class="field-label" for="about">О себе</label>
+        <textarea id="about" name="about" maxlength="300" placeholder="Увлечения, хобби, интересы, родной город, взгляды на жизнь"></textarea>
+        <div class="char-counter"><span id="aboutCount">0</span> / 300</div>
+      </div>
+    </section>
+
+  </form>
+
+  <!-- Показывается вместо формы после успешной отправки -->
+  <div class="success-box" id="successBox" hidden>
+    <div class="emoji">✅</div>
+    <h2>Анкета отправлена!</h2>
+    <p>Данные анкеты выведены в консоль браузера — отправка на сервер будет подключена позже.</p>
+  </div>
+
+</div>
+
+<script>
+  /* ==================================================================
+     1. ИНИЦИАЛИЗАЦИЯ TELEGRAM WEBAPP
+     ==================================================================
+     window.Telegram.WebApp появляется благодаря скрипту telegram-web-app.js
+     из <head>. Если страницу открыли не в Telegram (например, в обычном
+     браузере при разработке), Telegram.WebApp может быть undefined —
+     на этот случай делаем простую "заглушку" (mock), чтобы код ниже
+     не падал с ошибкой и страницу можно было спокойно тестировать.
+  */
+  const tg = window.Telegram && window.Telegram.WebApp
+    ? window.Telegram.WebApp
+    : {
+        ready() {},
+        expand() {},
+        MainButton: {
+          text: '',
+          setText(t) { this.text = t; console.log('[mock MainButton] text =', t); },
+          show() { console.log('[mock MainButton] show()'); },
+          hide() { console.log('[mock MainButton] hide()'); },
+          onClick(fn) { this._handler = fn; },
+          enable() {},
+          disable() {},
+        },
+        HapticFeedback: {
+          notificationOccurred() {},
+        },
+        themeParams: {},
+        onEvent() {},
+      };
+
+  tg.ready();
+  tg.expand();
+
+  /* ==================================================================
+     2. ЦВЕТА ИЗ Telegram.WebApp.themeParams
+     ==================================================================
+     CSS-переменные --tg-theme-* Telegram обычно подставляет сам, но
+     по заданию явно используем themeParams из JS — читаем объект
+     и прописываем те же переменные вручную. Так тема применится, даже
+     если конкретный клиент Telegram их не проставил.
+  */
+  function applyTelegramTheme() {
+    const p = tg.themeParams || {};
+    const root = document.documentElement.style;
+    if (p.bg_color) root.setProperty('--tg-theme-bg-color', p.bg_color);
+    if (p.secondary_bg_color) root.setProperty('--tg-theme-secondary-bg-color', p.secondary_bg_color);
+    if (p.text_color) root.setProperty('--tg-theme-text-color', p.text_color);
+    if (p.hint_color) root.setProperty('--tg-theme-hint-color', p.hint_color);
+    if (p.link_color) root.setProperty('--tg-theme-link-color', p.link_color);
+    if (p.button_color) root.setProperty('--tg-theme-button-color', p.button_color);
+    if (p.button_text_color) root.setProperty('--tg-theme-button-text-color', p.button_text_color);
+    if (p.destructive_text_color) root.setProperty('--tg-theme-destructive-text-color', p.destructive_text_color);
+  }
+  applyTelegramTheme();
+  // Пользователь может переключить тему прямо в Telegram, пока открыт мини-апп
+  tg.onEvent('themeChanged', applyTelegramTheme);
+
+  /* ==================================================================
+     3. УСЛОВНАЯ ЛОГИКА: Общежитие / Съёмная квартира
+     ==================================================================
+  */
+  const dormField = document.getElementById('dormField');
+  const apartmentField = document.getElementById('apartmentField');
+
+  document.querySelectorAll('input[name="housingType"]').forEach((input) => {
+    input.addEventListener('change', () => {
+      const isDorm = input.value === 'dorm' && input.checked;
+      const isApartment = input.value === 'apartment' && input.checked;
+      if (input.checked) {
+        dormField.hidden = !isDorm;
+        apartmentField.hidden = !isApartment;
+        // очищаем ошибку у поля "Тип жилья", раз выбор сделан
+        clearError('housingType');
+      }
+    });
+  });
+
+  /* ==================================================================
+     4. ФОТОГРАФИИ: загрузка, превью, удаление, base64
+     ==================================================================
+     photos — массив объектов { id, file, base64 }, хранит выбранные фото.
+  */
+  const MAX_PHOTOS = 3;
+  const MAX_PHOTO_SIZE = 5 * 1024 * 1024; // 5 МБ
+  let photos = [];
+  let nextPhotoId = 1;
+
+  const photoInput = document.getElementById('photoInput');
+  const photoGrid = document.getElementById('photoGrid');
+  const photoAddBtn = document.getElementById('photoAddBtn');
+
+  photoInput.addEventListener('change', (event) => {
+    const files = Array.from(event.target.files || []);
+    files.forEach((file) => {
+      if (photos.length >= MAX_PHOTOS) {
+        setError('photos', `Можно загрузить не более ${MAX_PHOTOS} фото`);
+        return;
+      }
+      if (!file.type.startsWith('image/')) {
+        setError('photos', 'Можно загружать только изображения');
+        return;
+      }
+      if (file.size > MAX_PHOTO_SIZE) {
+        setError('photos', `Файл "${file.name}" больше 5 МБ`);
+        return;
+      }
+
+      const id = nextPhotoId++;
+      const reader = new FileReader();
+      reader.onload = () => {
+        photos.push({ id, file, base64: reader.result });
+        clearError('photos');
+        renderPhotos();
+      };
+      reader.readAsDataURL(file);
+    });
+
+    // сбрасываем value, чтобы можно было выбрать тот же файл повторно после удаления
+    photoInput.value = '';
+  });
+
+  function removePhoto(id) {
+    photos = photos.filter((p) => p.id !== id);
+    renderPhotos();
+  }
+
+  function renderPhotos() {
+    // удаляем все текущие миниатюры, оставляя только кнопку "Добавить"
+    photoGrid.querySelectorAll('.photo-thumb').forEach((el) => el.remove());
+
+    photos.forEach((p) => {
+      const thumb = document.createElement('div');
+      thumb.className = 'photo-thumb';
+
+      const img = document.createElement('img');
+      img.src = p.base64;
+      img.alt = 'Фото';
+
+      const removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.className = 'remove-btn';
+      removeBtn.textContent = '×';
+      removeBtn.setAttribute('aria-label', 'Удалить фото');
+      removeBtn.addEventListener('click', () => removePhoto(p.id));
+
+      thumb.appendChild(img);
+      thumb.appendChild(removeBtn);
+      photoGrid.insertBefore(thumb, photoAddBtn);
+    });
+
+    // прячем кнопку "Добавить", когда набрали максимум фото
+    photoAddBtn.classList.toggle('is-disabled', photos.length >= MAX_PHOTOS);
+  }
+
+  /* ==================================================================
+     5. СЧЁТЧИК СИМВОЛОВ ДЛЯ "О СЕБЕ"
+     ==================================================================
+  */
+  const aboutInput = document.getElementById('about');
+  const aboutCount = document.getElementById('aboutCount');
+  aboutInput.addEventListener('input', () => {
+    aboutCount.textContent = aboutInput.value.length;
+  });
+
+  /* ==================================================================
+     6. ВАЛИДАЦИЯ
+     ==================================================================
+     Показ/скрытие текста ошибки под конкретным полем по имени поля.
+  */
+  function setError(field, message) {
+    const el = document.querySelector(`[data-error-for="${field}"]`);
+    if (el) el.textContent = message;
+  }
+  function clearError(field) {
+    setError(field, '');
+  }
+  function clearAllErrors() {
+    document.querySelectorAll('.field-error').forEach((el) => (el.textContent = ''));
+  }
+
+  /**
+   * Проверяет все обязательные поля формы.
+   * Возвращает true, если анкета заполнена верно, иначе false
+   * (и заодно выводит тексты ошибок под нужными полями).
+   */
+  function validateForm() {
+    clearAllErrors();
+    let isValid = true;
+
+    const name = document.getElementById('name').value.trim();
+    if (!name) {
+      setError('name', 'Укажите имя');
+      isValid = false;
+    }
+
+    const age = document.getElementById('age').value;
+    if (age && (Number(age) < 16 || Number(age) > 99)) {
+      setError('age', 'Укажите корректный возраст');
+      isValid = false;
+    }
+
+    const housingType = document.querySelector('input[name="housingType"]:checked');
+    if (!housingType) {
+      setError('housingType', 'Выберите тип жилья');
+      isValid = false;
+    } else if (housingType.value === 'dorm') {
+      const dormBuilding = document.getElementById('dormBuilding').value.trim();
+      if (!dormBuilding) {
+        setError('dormBuilding', 'Укажите корпус или номер общежития');
+        isValid = false;
+      }
+    } else if (housingType.value === 'apartment') {
+      const budget = document.getElementById('budget').value;
+      if (!budget) {
+        setError('budget', 'Выберите бюджет');
+        isValid = false;
+      }
+    }
+
+    const contact = document.getElementById('contact').value.trim();
+    if (!contact) {
+      setError('contact', 'Укажите контакт для связи');
+      isValid = false;
+    }
+
+    if (!document.querySelector('input[name="smoking"]:checked')) {
+      setError('smoking', 'Выберите вариант');
+      isValid = false;
+    }
+    if (!document.querySelector('input[name="sleepSchedule"]:checked')) {
+      setError('sleepSchedule', 'Выберите вариант');
+      isValid = false;
+    }
+    if (!document.querySelector('input[name="guests"]:checked')) {
+      setError('guests', 'Выберите вариант');
+      isValid = false;
+    }
+    if (!document.querySelector('input[name="cleanliness"]:checked')) {
+      setError('cleanliness', 'Выберите вариант');
+      isValid = false;
+    }
+
+    if (photos.length < 1) {
+      setError('photos', 'Добавьте хотя бы одно фото');
+      isValid = false;
+    }
+
+    return isValid;
+  }
+
+  /* ==================================================================
+     7. СБОРКА ДАННЫХ И "ОТПРАВКА"
+     ==================================================================
+     Пока нет backend — просто собираем все данные анкеты в один
+     JSON-объект и выводим в консоль. Когда появится сервер, здесь
+     нужно будет заменить console.log(...) на fetch(URL, { method: 'POST', ... }).
+  */
+  function collectFormData() {
+    const housingType = document.querySelector('input[name="housingType"]:checked').value;
+
+    const data = {
+      name: document.getElementById('name').value.trim(),
+      age: document.getElementById('age').value ? Number(document.getElementById('age').value) : null,
+      housingType,
+      contact: document.getElementById('contact').value.trim(),
+      smoking: document.querySelector('input[name="smoking"]:checked').value,
+      sleepSchedule: document.querySelector('input[name="sleepSchedule"]:checked').value,
+      guests: document.querySelector('input[name="guests"]:checked').value,
+      cleanliness: document.querySelector('input[name="cleanliness"]:checked').value,
+      phone: document.getElementById('phone').value.trim(),
+      socials: {
+        instagram: document.getElementById('instagram').value.trim(),
+        vk: document.getElementById('vk').value.trim(),
+        whatsapp: document.getElementById('whatsapp').value.trim(),
+      },
+      about: document.getElementById('about').value.trim(),
+      // фото в формате base64 (data URL), готовы к отправке на сервер
+      photos: photos.map((p) => p.base64),
+    };
+
+    if (housingType === 'dorm') {
+      data.dormBuilding = document.getElementById('dormBuilding').value.trim();
+    } else if (housingType === 'apartment') {
+      data.budget = document.getElementById('budget').value;
+    }
+
+    return data;
+  }
+
+  function submitForm() {
+    if (!validateForm()) {
+      tg.HapticFeedback.notificationOccurred('error');
+      return;
+    }
+
+    const data = collectFormData();
+
+    // TODO: когда появится backend, заменить на:
+    // fetch('https://YOUR_BACKEND_URL', { method: 'POST', body: JSON.stringify(data) })
+    console.log('Данные анкеты:', data);
+
+    tg.HapticFeedback.notificationOccurred('success');
+
+    // Показываем экран успеха вместо формы
+    document.getElementById('form').hidden = true;
+    document.getElementById('successBox').hidden = false;
+    tg.MainButton.hide();
+  }
+
+  /* ==================================================================
+     8. КНОПКА ОТПРАВКИ — Telegram.WebApp.MainButton
+     ==================================================================
+     Вместо обычной HTML-кнопки используем нативную кнопку Telegram.
+  */
+  tg.MainButton.setText('Отправить анкету');
+  tg.MainButton.show();
+  tg.MainButton.onClick(submitForm);
+
+  // На всякий случай отключаем обычную отправку формы по Enter
+  document.getElementById('form').addEventListener('submit', (e) => e.preventDefault());
+</script>
+
+</body>
+</html>
