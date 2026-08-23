@@ -1,0 +1,7 @@
+\.idea/
+*.iml
+\.vs/
+bin/
+obj/
+node_modules/
+*.log
