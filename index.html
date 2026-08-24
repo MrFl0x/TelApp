@@ -10,6 +10,10 @@
      чтобы объект window.Telegram.WebApp уже существовал. -->
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 
+<!-- Supabase JS SDK (UMD-сборка) — даёт глобальный объект window.supabase
+     с методом createClient(). Тоже должен подключаться до нашего скрипта. -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+
 <style>
   /* ============================================================
      Базовые цвета берём из тем Telegram (--tg-theme-*).
@@ -279,21 +283,23 @@
 
       <!-- Показывается только если выбрано "Общежитие" -->
       <div class="field" id="dormField" hidden>
-        <label class="field-label" for="dormBuilding">Корпус / номер общежития <span class="req">*</span></label>
-        <input type="text" id="dormBuilding" name="dormBuilding" maxlength="30" placeholder="Например, корпус 3" />
+        <label class="field-label" for="dormBuilding">Корпус/номер общежития, направление и способ поступления <span class="req">*</span></label>
+        <input type="text" id="dormBuilding" name="dormBuilding" maxlength="150" placeholder="Например: корпус 3, комн. 214, «Информатика и ВТ», бюджет" />
+        <p class="field-hint">Укажите корпус/номер общежития, направление подготовки и способ поступления (бюджет/платно)</p>
         <span class="field-error" data-error-for="dormBuilding"></span>
       </div>
 
       <!-- Показывается только если выбрано "Съёмная квартира" -->
       <div class="field" id="apartmentField" hidden>
-        <label class="field-label" for="budget">Бюджет <span class="req">*</span></label>
-        <select id="budget" name="budget">
-          <option value="">Выберите диапазон</option>
-          <option value="0-15000">до 15 000 ₽</option>
-          <option value="15000-25000">15 000 – 25 000 ₽</option>
-          <option value="25000-40000">25 000 – 40 000 ₽</option>
-          <option value="40000+">от 40 000 ₽</option>
-        </select>
+        <label class="field-label">Бюджет <span class="req">*</span></label>
+        <div class="field-row">
+          <div>
+            <input type="number" id="budgetFrom" name="budgetFrom" min="0" step="500" placeholder="От, ₽" />
+          </div>
+          <div>
+            <input type="number" id="budgetTo" name="budgetTo" min="0" step="500" placeholder="До, ₽" />
+          </div>
+        </div>
         <span class="field-error" data-error-for="budget"></span>
       </div>
 
@@ -439,6 +445,8 @@
           onClick(fn) { this._handler = fn; },
           enable() {},
           disable() {},
+          showProgress() { console.log('[mock MainButton] showProgress()'); },
+          hideProgress() { console.log('[mock MainButton] hideProgress()'); },
         },
         HapticFeedback: {
           notificationOccurred() {},
@@ -449,6 +457,19 @@
 
   tg.ready();
   tg.expand();
+
+  /* ==================================================================
+     1a. КЛИЕНТ SUPABASE
+     ==================================================================
+     Замените значения ниже на данные своего проекта:
+     Project Settings → API → Project URL / anon public key.
+     anon-ключ публичный и предназначен для использования в браузере —
+     это нормально, безопасность обеспечивают RLS-политики в БД
+     (см. supabase/schema.sql).
+  */
+  const SUPABASE_URL = 'auyrtysontbhtgkqmpfm';
+  const SUPABASE_ANON_KEY = 'sb_publishable_21gvjby0A79tA4tTD26_Bg_hewDw1qrВсе ';
+  const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
   /* ==================================================================
      2. ЦВЕТА ИЗ Telegram.WebApp.themeParams
@@ -625,13 +646,20 @@
     } else if (housingType.value === 'dorm') {
       const dormBuilding = document.getElementById('dormBuilding').value.trim();
       if (!dormBuilding) {
-        setError('dormBuilding', 'Укажите корпус или номер общежития');
+        setError('dormBuilding', 'Укажите корпус/номер общежития, направление и способ поступления');
         isValid = false;
       }
     } else if (housingType.value === 'apartment') {
-      const budget = document.getElementById('budget').value;
-      if (!budget) {
-        setError('budget', 'Выберите бюджет');
+      const budgetFrom = document.getElementById('budgetFrom').value;
+      const budgetTo = document.getElementById('budgetTo').value;
+      if (!budgetFrom || !budgetTo) {
+        setError('budget', 'Укажите диапазон бюджета (от и до)');
+        isValid = false;
+      } else if (Number(budgetFrom) < 0 || Number(budgetTo) < 0) {
+        setError('budget', 'Бюджет не может быть отрицательным');
+        isValid = false;
+      } else if (Number(budgetFrom) > Number(budgetTo)) {
+        setError('budget', '«От» не может быть больше, чем «До»');
         isValid = false;
       }
     }
@@ -668,11 +696,12 @@
   }
 
   /* ==================================================================
-     7. СБОРКА ДАННЫХ И "ОТПРАВКА"
+     7. СБОРКА ДАННЫХ
      ==================================================================
-     Пока нет backend — просто собираем все данные анкеты в один
-     JSON-объект и выводим в консоль. Когда появится сервер, здесь
-     нужно будет заменить console.log(...) на fetch(URL, { method: 'POST', ... }).
+     Собираем все поля анкеты (кроме фото — они грузятся отдельно
+     в Storage, см. uploadPhotos) в один плоский объект с именами
+     колонок таблицы roommate_applications, чтобы просто передать
+     его в supabaseClient.from(...).insert(...).
   */
   function collectFormData() {
     const housingType = document.querySelector('input[name="housingType"]:checked').value;
@@ -680,54 +709,125 @@
     const data = {
       name: document.getElementById('name').value.trim(),
       age: document.getElementById('age').value ? Number(document.getElementById('age').value) : null,
-      housingType,
+      housing_type: housingType,
+      dorm_building: null,
+      budget_from: null,
+      budget_to: null,
       contact: document.getElementById('contact').value.trim(),
       smoking: document.querySelector('input[name="smoking"]:checked').value,
-      sleepSchedule: document.querySelector('input[name="sleepSchedule"]:checked').value,
+      sleep_schedule: document.querySelector('input[name="sleepSchedule"]:checked').value,
       guests: document.querySelector('input[name="guests"]:checked').value,
       cleanliness: document.querySelector('input[name="cleanliness"]:checked').value,
-      phone: document.getElementById('phone').value.trim(),
-      socials: {
-        instagram: document.getElementById('instagram').value.trim(),
-        vk: document.getElementById('vk').value.trim(),
-        whatsapp: document.getElementById('whatsapp').value.trim(),
-      },
-      about: document.getElementById('about').value.trim(),
-      // фото в формате base64 (data URL), готовы к отправке на сервер
-      photos: photos.map((p) => p.base64),
+      phone: document.getElementById('phone').value.trim() || null,
+      instagram: document.getElementById('instagram').value.trim() || null,
+      vk: document.getElementById('vk').value.trim() || null,
+      whatsapp: document.getElementById('whatsapp').value.trim() || null,
+      about: document.getElementById('about').value.trim() || null,
     };
 
     if (housingType === 'dorm') {
-      data.dormBuilding = document.getElementById('dormBuilding').value.trim();
+      data.dorm_building = document.getElementById('dormBuilding').value.trim();
     } else if (housingType === 'apartment') {
-      data.budget = document.getElementById('budget').value;
+      data.budget_from = Number(document.getElementById('budgetFrom').value);
+      data.budget_to = Number(document.getElementById('budgetTo').value);
     }
 
     return data;
   }
 
-  function submitForm() {
+  /* ==================================================================
+     8. ЗАГРУЗКА ФОТО В SUPABASE STORAGE
+     ==================================================================
+     Каждое фото заливается в бакет `roommate-photos` под случайным
+     именем. Возвращаем массив публичных URL — их и запишем в колонку
+     photo_urls таблицы roommate_applications.
+  */
+  function generateFileId() {
+    if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+    // Простой fallback для старых WebView без crypto.randomUUID
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+      const r = (Math.random() * 16) | 0;
+      const v = c === 'x' ? r : (r & 0x3) | 0x8;
+      return v.toString(16);
+    });
+  }
+
+  async function uploadPhotos(photoList) {
+    const urls = [];
+    for (const photo of photoList) {
+      const extMatch = /\.([a-zA-Z0-9]+)$/.exec(photo.file.name);
+      const ext = extMatch ? extMatch[1].toLowerCase() : 'jpg';
+      const path = `${generateFileId()}.${ext}`;
+
+      const { error: uploadError } = await supabaseClient.storage
+        .from('roommate-photos')
+        .upload(path, photo.file, { contentType: photo.file.type, upsert: false });
+
+      if (uploadError) {
+        throw new Error(`Не удалось загрузить фото "${photo.file.name}": ${uploadError.message}`);
+      }
+
+      const { data: publicUrlData } = supabaseClient.storage
+        .from('roommate-photos')
+        .getPublicUrl(path);
+
+      urls.push(publicUrlData.publicUrl);
+    }
+    return urls;
+  }
+
+  /* ==================================================================
+     9. ОТПРАВКА АНКЕТЫ В SUPABASE
+     ==================================================================
+     1) валидируем форму;
+     2) заливаем фото в Storage и получаем их публичные URL;
+     3) вставляем запись в таблицу roommate_applications.
+  */
+  async function submitForm() {
     if (!validateForm()) {
       tg.HapticFeedback.notificationOccurred('error');
       return;
     }
 
-    const data = collectFormData();
+    tg.MainButton.showProgress();
+    tg.MainButton.disable();
 
-    // TODO: когда появится backend, заменить на:
-    // fetch('https://YOUR_BACKEND_URL', { method: 'POST', body: JSON.stringify(data) })
-    console.log('Данные анкеты:', data);
+    try {
+      const photoUrls = await uploadPhotos(photos);
 
-    tg.HapticFeedback.notificationOccurred('success');
+      const tgUser = tg.initDataUnsafe && tg.initDataUnsafe.user;
+      const payload = {
+        ...collectFormData(),
+        photo_urls: photoUrls,
+        telegram_user_id: tgUser ? tgUser.id : null,
+        telegram_username: tgUser ? tgUser.username : null,
+      };
 
-    // Показываем экран успеха вместо формы
-    document.getElementById('form').hidden = true;
-    document.getElementById('successBox').hidden = false;
-    tg.MainButton.hide();
+      const { error: insertError } = await supabaseClient
+        .from('roommate_applications')
+        .insert(payload);
+
+      if (insertError) {
+        throw new Error(insertError.message);
+      }
+
+      tg.HapticFeedback.notificationOccurred('success');
+
+      // Показываем экран успеха вместо формы
+      document.getElementById('form').hidden = true;
+      document.getElementById('successBox').hidden = false;
+      tg.MainButton.hide();
+    } catch (err) {
+      console.error('Ошибка отправки анкеты:', err);
+      setError('photos', err.message || 'Не удалось отправить анкету. Попробуйте ещё раз.');
+      tg.HapticFeedback.notificationOccurred('error');
+      tg.MainButton.hideProgress();
+      tg.MainButton.enable();
+    }
   }
 
   /* ==================================================================
-     8. КНОПКА ОТПРАВКИ — Telegram.WebApp.MainButton
+     10. КНОПКА ОТПРАВКИ — Telegram.WebApp.MainButton
      ==================================================================
      Вместо обычной HTML-кнопки используем нативную кнопку Telegram.
   */

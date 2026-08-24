@@ -1,4 +1,126 @@
-# TelApp
+# TelApp — «Анкета сожителя»
+
+Telegram Mini App (чистые HTML/CSS/JS, без фреймворков) — форма анкеты для
+поиска сожителей. Анкета и фото сохраняются в Supabase.
+
+- `index.html` — сама форма (UI, валидация, условная логика, отправка в Supabase)
+- `supabase/schema.sql` — SQL-схема: таблица, RLS-политики, Storage-бакет для фото
+
+## Как это работает
+
+```mermaid
+sequenceDiagram
+    participant U as Пользователь (Telegram)
+    participant App as index.html (Mini App)
+    participant Storage as Supabase Storage<br/>(бакет roommate-photos)
+    participant DB as Supabase Postgres<br/>(таблица roommate_applications)
+
+    U->>App: Заполняет анкету, выбирает 1–3 фото
+    App->>App: Валидация полей и фото на клиенте
+    U->>App: Нажимает MainButton «Отправить анкету»
+    App->>Storage: upload() каждое фото (anon-ключ)
+    Storage-->>App: publicUrl для каждого фото
+    App->>DB: insert(поля анкеты + photo_urls) (anon-ключ)
+    DB-->>App: OK, либо ошибка (RLS / CHECK-constraint)
+    App-->>U: Экран «Анкета отправлена ✅»
+```
+
+Ключевая деталь: **и загрузка фото, и запись в таблицу идут прямо из
+браузера пользователя** с публичным anon-ключом — отдельного backend-сервера
+нет. Всё разграничение прав держится на Row Level Security (RLS) в Postgres
+и на политиках Storage.
+
+## Схема данных
+
+Таблица `public.roommate_applications` (полный SQL — в
+[`supabase/schema.sql`](supabase/schema.sql)):
+
+```mermaid
+erDiagram
+    roommate_applications {
+        uuid id PK
+        timestamptz created_at
+        text name
+        smallint age
+        text housing_type "dorm | apartment"
+        text dorm_building "если housing_type = dorm"
+        text budget "если housing_type = apartment"
+        text contact
+        text smoking "yes | no | sometimes"
+        text sleep_schedule "owl | lark"
+        text guests "often | rarely | never"
+        text cleanliness "important | not_important"
+        text_array photo_urls "1–3 URL из Storage"
+        text phone
+        text instagram
+        text vk
+        text whatsapp
+        text about "до 300 символов"
+        bigint telegram_user_id "из tg.initDataUnsafe, не проверяется"
+        text telegram_username "из tg.initDataUnsafe, не проверяется"
+    }
+```
+
+Фото хранятся не в таблице, а в Storage-бакете `roommate-photos`
+(до 5 МБ, только изображения) — в БД лежат лишь их публичные ссылки.
+
+## Доступ и безопасность — кто может достучаться до базы?
+
+**Anon-ключ (`SUPABASE_ANON_KEY`) публичный по дизайну** — он лежит прямо в
+`index.html`, и любой может увидеть его через «Просмотр кода страницы» или
+DevTools. Это нормально для Supabase: безопасность обеспечивает не
+секретность ключа, а RLS-политики. Но это значит, что **с этим ключом можно
+слать запросы к API напрямую (curl/Postman), в обход самой формы**:
+
+| Действие | Доступно с любого устройства (anon-ключ)? | Почему |
+|---|---|---|
+| Прочитать чужие анкеты (`SELECT`) | ❌ Нет | policy на `SELECT` не создана → RLS блокирует по умолчанию |
+| Изменить / удалить анкету (`UPDATE`/`DELETE`) | ❌ Нет | policy не создана → блокируется |
+| Создать анкету (`INSERT`) | ✅ Да, любую | policy разрешает всем: `with check (true)` |
+| Загрузить файл в бакет `roommate-photos` | ✅ Да | policy разрешает `INSERT` в `storage.objects` анониму |
+| Скачать / открыть фото | ✅ Да (осознанно) | бакет публичный — иначе фото не отобразятся у других |
+
+**Вывод:**
+
+- 🔒 **Персональные данные защищены на чтение** — имя, контакт, телефон,
+  «о себе», фото других людей нельзя выгрузить через anon-ключ, пока вы сами
+  не добавите `SELECT`-политику.
+- ⚠️ **Но таблицу можно заспамить.** INSERT-политика проверяет только
+  структуру данных (`CHECK`-constraints: диапазоны значений, длину строк,
+  1–3 фото), а не то, что запрос реально пришёл из вашей формы. Значит,
+  кто угодно может напрямую создавать фейковые анкеты или заливать
+  произвольные картинки в Storage, минуя `index.html`.
+- ⚠️ **`telegram_user_id` / `telegram_username` не верифицируются.** Они
+  берутся из `tg.initDataUnsafe` на клиенте без проверки HMAC-подписи на
+  сервере — их можно подделать прямым запросом к API. Это не даёт доступа
+  к чужим данным, но эти поля нельзя считать 100%-но достоверными.
+- ✅ `service_role` ключ (полный доступ в обход RLS) в проекте **нигде не
+  используется в браузере** — это правильно. Его нельзя добавлять в
+  `index.html` ни при каких обстоятельствах.
+
+### Если понадобится усилить защиту
+
+- Добавить проверку HMAC-подписи `initData` на сервере (Supabase Edge
+  Function) перед `insert`, чтобы доверять `telegram_user_id`.
+- Ограничить частоту отправок (rate limiting) или добавить капчу — сейчас
+  ничего не мешает боту слать сотни INSERT-запросов подряд.
+- Если появится экран «смотреть анкеты других» — добавить точечную
+  `SELECT`-политику (пример уже есть закомментированным в
+  `supabase/schema.sql`), а не открывать таблицу целиком.
+
+## Настройка
+
+1. Выполнить [`supabase/schema.sql`](supabase/schema.sql) в SQL Editor
+   вашего проекта Supabase.
+2. В `index.html` подставить свои значения:
+   ```js
+   const SUPABASE_URL = 'https://YOUR_PROJECT.supabase.co';
+   const SUPABASE_ANON_KEY = 'YOUR_ANON_PUBLIC_KEY';
+   ```
+   (Project Settings → API → Project URL / anon public key)
+
+## Исходное ТЗ
+
 Напиши мне полноценное Telegram Mini App на HTML/CSS/JavaScript (без фреймворков,
 ) — форму анкеты для поиска сожителей.
 
