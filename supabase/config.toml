@@ -1,0 +1,10 @@
+# Обе функции дергают внешние сервисы (Supabase Database Webhook и
+# Telegram), а не залогиненный пользователь с Supabase JWT — поэтому
+# отключаем встроенную проверку JWT и полагаемся на свои секреты
+# (WEBHOOK_SECRET / TELEGRAM_WEBHOOK_SECRET, см. комментарии в коде функций).
+
+[functions.notify-moderator]
+verify_jwt = false
+
+[functions.telegram-webhook]
+verify_jwt = false

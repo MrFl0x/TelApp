@@ -5,6 +5,11 @@ Telegram Mini App (чистые HTML/CSS/JS, без фреймворков) — 
 
 - `index.html` — сама форма (UI, валидация, условная логика, отправка в Supabase)
 - `supabase/schema.sql` — SQL-схема: таблица, RLS-политики, Storage-бакет для фото
+- `supabase/migrations/` — миграции для уже существующей базы
+- `supabase/functions/notify-moderator/` — Edge Function: при новой анкете
+  шлёт её модератору в Telegram (фото + кнопки «Принять/Отклонить»)
+- `supabase/functions/telegram-webhook/` — Edge Function: обрабатывает
+  нажатия этих кнопок и обновляет статус анкеты в БД
 
 ## Как это работает
 
@@ -29,6 +34,32 @@ sequenceDiagram
 браузера пользователя** с публичным anon-ключом — отдельного backend-сервера
 нет. Всё разграничение прав держится на Row Level Security (RLS) в Postgres
 и на политиках Storage.
+
+### Модерация анкет в Telegram
+
+После `insert` Database Webhook Supabase вызывает Edge Function
+`notify-moderator`, которая шлёт анкету модератору в Telegram; модератор
+нажимает кнопку, Telegram шлёт callback в `telegram-webhook`, та обновляет
+статус анкеты:
+
+```mermaid
+sequenceDiagram
+    participant DB as Supabase Postgres
+    participant NM as notify-moderator
+    participant TG as Telegram Bot API
+    participant Mod as Модератор
+
+    DB->>NM: Database Webhook (INSERT в roommate_applications)
+    NM->>TG: sendPhoto(caption, кнопки ✅/❌)
+    TG-->>Mod: Сообщение с анкетой
+    Mod->>TG: Нажимает ✅ Принять / ❌ Отклонить
+    TG->>+telegram-webhook: callback_query (webhook)
+    telegram-webhook->>DB: update status = approved/rejected
+    telegram-webhook->>TG: убрать кнопки, отметить решение
+    telegram-webhook-->>-TG: 200 ok
+```
+
+Настройка — см. раздел [«Настройка уведомлений модератору»](#настройка-уведомлений-модератору) ниже.
 
 ## Схема данных
 
@@ -118,6 +149,49 @@ DevTools. Это нормально для Supabase: безопасность о
    const SUPABASE_ANON_KEY = 'YOUR_ANON_PUBLIC_KEY';
    ```
    (Project Settings → API → Project URL / anon public key)
+
+## Настройка уведомлений модератору
+
+1. **Бот.** Создать бота через [@BotFather](https://t.me/BotFather),
+   сохранить токен. Узнать свой numeric chat id (или id чата модераторов)
+   через [@userinfobot](https://t.me/userinfobot).
+
+2. **Применить миграцию** `supabase/migrations/20260824_notify_moderator.sql`
+   (или весь `schema.sql`, если БД ещё не создана) — добавляет поля
+   `status`, `moderated_at`, `moderated_by`, `moderation_messages`.
+
+3. **Задеплоить функции:**
+   ```sh
+   supabase functions deploy notify-moderator --no-verify-jwt
+   supabase functions deploy telegram-webhook --no-verify-jwt
+   ```
+
+4. **Секреты функций** (Project Settings → Edge Functions → Secrets, или
+   `supabase secrets set`):
+   ```
+   TELEGRAM_BOT_TOKEN=...              # токен от @BotFather
+   MODERATOR_CHAT_IDS=123456789        # можно несколько через запятую
+   WEBHOOK_SECRET=<случайная строка>   # для notify-moderator
+   TELEGRAM_WEBHOOK_SECRET=<другая случайная строка>  # для telegram-webhook
+   ```
+   (`SUPABASE_URL` и `SUPABASE_SERVICE_ROLE_KEY` Supabase прокидывает в
+   Edge Functions сама — их задавать не нужно.)
+
+5. **Database Webhook** (Dashboard → Database → Webhooks → Create a new
+   webhook): таблица `roommate_applications`, событие `INSERT`, тип
+   `Supabase Edge Functions`, функция `notify-moderator`, HTTP-заголовок
+   `x-webhook-secret: <значение WEBHOOK_SECRET из шага 4>`.
+
+6. **Telegram webhook** для кнопок — один раз вызвать:
+   ```sh
+   curl "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook" \
+     -d "url=https://<project-ref>.functions.supabase.co/telegram-webhook" \
+     -d "secret_token=<TELEGRAM_WEBHOOK_SECRET из шага 4>"
+   ```
+
+После этого на каждую новую анкету модератору будет приходить сообщение с
+фото и кнопками «✅ Принять» / «❌ Отклонить», а решение будет сохраняться в
+`roommate_applications.status`.
 
 ## Исходное ТЗ
 
