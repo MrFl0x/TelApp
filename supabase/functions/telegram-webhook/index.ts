@@ -5,18 +5,27 @@
 // "✅ Принять" / "❌ Отклонить" под анкетой в чате модератора: обновляет
 // статус анкеты в БД и убирает кнопки из всех сообщений с этой анкетой.
 //
+// Анкеты, принятые модератором ("✅ Принять"), дополнительно публикуются в
+// Telegram-канал (CHANNEL_CHAT_ID) — с фото и той же подписью, без кнопок.
+//
 // Переменные окружения:
 //   TELEGRAM_BOT_TOKEN      — токен бота
 //   TELEGRAM_WEBHOOK_SECRET — секрет, который Telegram присылает в
 //                             заголовке X-Telegram-Bot-Api-Secret-Token
 //                             (задаётся параметром secret_token в setWebhook)
+//   CHANNEL_CHAT_ID         — numeric id канала, куда публиковать принятые
+//                             анкеты (бот должен быть там админом с правом
+//                             постить сообщения); если не задан — публикация
+//                             в канал пропускается, статус всё равно пишется
 //   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY — прокидываются платформой
 //                             автоматически, вручную задавать не нужно
 
 import { createClient } from 'jsr:@supabase/supabase-js@2'
+import { formatApplicationCaption } from '../_shared/format-application.ts'
 
 const TELEGRAM_BOT_TOKEN = Deno.env.get('TELEGRAM_BOT_TOKEN') ?? ''
 const TELEGRAM_WEBHOOK_SECRET = Deno.env.get('TELEGRAM_WEBHOOK_SECRET') ?? ''
+const CHANNEL_CHAT_ID = Deno.env.get('CHANNEL_CHAT_ID') ?? ''
 
 const supabase = createClient(
   Deno.env.get('SUPABASE_URL') ?? '',
@@ -36,6 +45,35 @@ async function callTelegram(method: string, payload: Record<string, unknown>) {
   const data = await res.json()
   if (!data.ok) console.error(`Telegram ${method} failed:`, data)
   return data
+}
+
+// Публикует принятую анкету в канал: одно фото с подписью, либо несколько
+// фото альбомом (подпись — на первом). Не выводим кнопки и не упоминаем,
+// кто именно из модераторов принял анкету — это уже не нужно читателям канала.
+async function postToChannel(record: Record<string, any>) {
+  if (!CHANNEL_CHAT_ID) return
+  const caption = formatApplicationCaption(record, '', { includeSubmitter: false })
+  const photoUrls: string[] = record.photo_urls ?? []
+
+  if (photoUrls.length === 0) {
+    await callTelegram('sendMessage', { chat_id: CHANNEL_CHAT_ID, text: caption, parse_mode: 'HTML' })
+  } else if (photoUrls.length === 1) {
+    await callTelegram('sendPhoto', {
+      chat_id: CHANNEL_CHAT_ID,
+      photo: photoUrls[0],
+      caption,
+      parse_mode: 'HTML',
+    })
+  } else {
+    await callTelegram('sendMediaGroup', {
+      chat_id: CHANNEL_CHAT_ID,
+      media: photoUrls.map((url, i) => ({
+        type: 'photo',
+        media: url,
+        ...(i === 0 ? { caption, parse_mode: 'HTML' } : {}),
+      })),
+    })
+  }
 }
 
 Deno.serve(async (req) => {
@@ -60,9 +98,10 @@ Deno.serve(async (req) => {
     return new Response('ok')
   }
 
+  // select('*') — при "Принять" нужны все поля анкеты, чтобы собрать пост в канал.
   const { data: application, error: fetchError } = await supabase
     .from('roommate_applications')
-    .select('status, moderation_messages')
+    .select('*')
     .eq('id', applicationId)
     .single()
 
@@ -103,6 +142,10 @@ Deno.serve(async (req) => {
       show_alert: true,
     })
     return new Response('ok')
+  }
+
+  if (status === 'approved') {
+    await postToChannel(application)
   }
 
   const clickedChatId = callback.message?.chat?.id

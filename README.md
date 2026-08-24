@@ -9,7 +9,10 @@ Telegram Mini App (чистые HTML/CSS/JS, без фреймворков) — 
 - `supabase/functions/notify-moderator/` — Edge Function: при новой анкете
   шлёт её модератору в Telegram (фото + кнопки «Принять/Отклонить»)
 - `supabase/functions/telegram-webhook/` — Edge Function: обрабатывает
-  нажатия этих кнопок и обновляет статус анкеты в БД
+  нажатия этих кнопок, обновляет статус анкеты в БД и публикует принятые
+  анкеты в канал
+- `supabase/functions/_shared/` — общее форматирование анкеты в текст,
+  используется обеими функциями
 
 ## Как это работает
 
@@ -56,6 +59,9 @@ sequenceDiagram
     TG->>+telegram-webhook: callback_query (webhook)
     telegram-webhook->>DB: update status = approved/rejected
     telegram-webhook->>TG: убрать кнопки, отметить решение
+    opt статус = approved
+        telegram-webhook->>TG: пост анкеты в канал (CHANNEL_CHAT_ID)
+    end
     telegram-webhook-->>-TG: 200 ok
 ```
 
@@ -173,7 +179,12 @@ DevTools. Это нормально для Supabase: безопасность о
    MODERATOR_CHAT_IDS=123456789        # можно несколько через запятую
    WEBHOOK_SECRET=<случайная строка>   # для notify-moderator
    TELEGRAM_WEBHOOK_SECRET=<другая случайная строка>  # для telegram-webhook
+   CHANNEL_CHAT_ID=-100...             # id канала для принятых анкет (необязательно)
    ```
+   Бот должен быть добавлен в канал администратором с правом «Публиковать
+   сообщения». Узнать numeric id приватного канала: переслать любой пост
+   из канала боту в личку и посмотреть `forward_from_chat.id` в апдейте
+   (через `getUpdates`, предварительно временно сняв вебхук `deleteWebhook`).
    (`SUPABASE_URL` и `SUPABASE_SERVICE_ROLE_KEY` Supabase прокидывает в
    Edge Functions сама — их задавать не нужно.)
 
