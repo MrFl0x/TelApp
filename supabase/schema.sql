@@ -42,7 +42,7 @@ create table if not exists public.roommate_applications (
   instagram          text,
   vk                 text,
   whatsapp           text,
-  about              text check (char_length(about) <= 300),
+  about              text check (char_length(about) <= 500),
 
   -- Данные из Telegram WebApp initData — помогают понять, кто именно
   -- отправил анкету (в отличие от поля "contact", их не подделать через форму)

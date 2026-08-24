@@ -154,8 +154,16 @@ Deno.serve(async (req) => {
     ? application.moderation_messages
     : [{ chat_id: clickedChatId, message_id: clickedMessageId }]
 
+  const confirmationText =
+    status === 'approved' && CHANNEL_CHAT_ID
+      ? `${statusLabel} — ${moderatorName}\nОпубликована в канале ✅`
+      : `${statusLabel} — ${moderatorName}`
+
   for (const ref of refs) {
     // Снимаем кнопки со всех сообщений с этой анкетой, у всех модераторов.
+    // Каждый вызов — по отдельности и без выброса исключений, чтобы сбой
+    // одного шага (например, edit при не изменившемся тексте) не мешал
+    // остальным и модератор в любом случае получил явное сообщение ниже.
     await callTelegram('editMessageReplyMarkup', {
       chat_id: ref.chat_id,
       message_id: ref.message_id,
@@ -164,7 +172,8 @@ Deno.serve(async (req) => {
 
     if (ref.chat_id === clickedChatId && ref.message_id === clickedMessageId) {
       // В сообщении, где нажали кнопку, есть исходная подпись — дописываем
-      // в неё итог решения.
+      // в неё итог решения (best-effort: если Telegram откажет — не страшно,
+      // ниже всё равно уйдёт отдельное сообщение-подтверждение).
       const original = callback.message?.caption ?? callback.message?.text ?? ''
       const updatedText = `${original}\n\n${statusLabel} — ${escapeHtml(moderatorName)}`
       const method = callback.message?.caption !== undefined ? 'editMessageCaption' : 'editMessageText'
@@ -175,15 +184,16 @@ Deno.serve(async (req) => {
         [textField]: updatedText,
         parse_mode: 'HTML',
       })
-    } else {
-      // У остальных модераторов исходного текста под рукой нет — просто
-      // сообщаем решение отдельным сообщением-ответом.
-      await callTelegram('sendMessage', {
-        chat_id: ref.chat_id,
-        reply_to_message_id: ref.message_id,
-        text: `${statusLabel} — ${moderatorName}`,
-      })
     }
+
+    // Явное сообщение-подтверждение решения — отдельно от edit'а выше,
+    // чтобы модератор точно увидел ответ, даже если caption не поменялся
+    // или его не было (текстовое сообщение без фото).
+    await callTelegram('sendMessage', {
+      chat_id: ref.chat_id,
+      reply_to_message_id: ref.message_id,
+      text: confirmationText,
+    })
   }
 
   await callTelegram('answerCallbackQuery', {
