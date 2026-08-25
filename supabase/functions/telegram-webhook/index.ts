@@ -6,17 +6,24 @@
 // статус анкеты в БД и убирает кнопки из всех сообщений с этой анкетой.
 //
 // Анкеты, принятые модератором ("✅ Принять"), дополнительно публикуются в
-// Telegram-канал (CHANNEL_CHAT_ID) — с фото и той же подписью, без кнопок.
+// Telegram-каналы (CHANNEL_CHAT_IDS) — с фото и той же подписью, без кнопок.
+//
+// Также обрабатывает команду /start в личке с ботом: шлёт короткое
+// приветствие с кнопкой, открывающей Mini App (MINI_APP_URL).
 //
 // Переменные окружения:
 //   TELEGRAM_BOT_TOKEN      — токен бота
 //   TELEGRAM_WEBHOOK_SECRET — секрет, который Telegram присылает в
 //                             заголовке X-Telegram-Bot-Api-Secret-Token
 //                             (задаётся параметром secret_token в setWebhook)
-//   CHANNEL_CHAT_ID         — numeric id канала, куда публиковать принятые
-//                             анкеты (бот должен быть там админом с правом
-//                             постить сообщения); если не задан — публикация
-//                             в канал пропускается, статус всё равно пишется
+//   CHANNEL_CHAT_ID(S)      — id канала(ов), куда публиковать принятые
+//                             анкеты, через запятую; numeric id или
+//                             @username публичного канала (бот должен быть
+//                             там админом с правом постить сообщения); если
+//                             не задан — публикация в каналы пропускается,
+//                             статус всё равно пишется
+//   MINI_APP_URL            — ссылка на Mini App для кнопки в /start
+//                             (по умолчанию — GitHub Pages этого репозитория)
 //   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY — прокидываются платформой
 //                             автоматически, вручную задавать не нужно
 
@@ -25,7 +32,18 @@ import { formatApplicationCaption } from '../_shared/format-application.ts'
 
 const TELEGRAM_BOT_TOKEN = Deno.env.get('TELEGRAM_BOT_TOKEN') ?? ''
 const TELEGRAM_WEBHOOK_SECRET = Deno.env.get('TELEGRAM_WEBHOOK_SECRET') ?? ''
-const CHANNEL_CHAT_ID = Deno.env.get('CHANNEL_CHAT_ID') ?? ''
+// Поддерживаем и CHANNEL_CHAT_ID (старое имя, один канал), и CHANNEL_CHAT_IDS
+// (новое имя, несколько каналов через запятую) — чтобы не ломать настройку
+// у тех, кто уже задал секрет под старым именем.
+const CHANNEL_CHAT_IDS = (
+  Deno.env.get('CHANNEL_CHAT_IDS') ??
+  Deno.env.get('CHANNEL_CHAT_ID') ??
+  ''
+)
+  .split(',')
+  .map((id) => id.trim())
+  .filter(Boolean)
+const MINI_APP_URL = Deno.env.get('MINI_APP_URL') || 'https://mrfl0x.github.io/TelApp/'
 
 const supabase = createClient(
   Deno.env.get('SUPABASE_URL') ?? '',
@@ -47,32 +65,35 @@ async function callTelegram(method: string, payload: Record<string, unknown>) {
   return data
 }
 
-// Публикует принятую анкету в канал: одно фото с подписью, либо несколько
-// фото альбомом (подпись — на первом). Не выводим кнопки и не упоминаем,
-// кто именно из модераторов принял анкету — это уже не нужно читателям канала.
+// Публикует принятую анкету во все настроенные каналы: одно фото с
+// подписью, либо несколько фото альбомом (подпись — на первом). Не выводим
+// кнопки и не упоминаем, кто именно из модераторов принял анкету — это уже
+// не нужно читателям канала.
 async function postToChannel(record: Record<string, any>) {
-  if (!CHANNEL_CHAT_ID) return
+  if (CHANNEL_CHAT_IDS.length === 0) return
   const caption = formatApplicationCaption(record, '', { includeSubmitter: false })
   const photoUrls: string[] = record.photo_urls ?? []
 
-  if (photoUrls.length === 0) {
-    await callTelegram('sendMessage', { chat_id: CHANNEL_CHAT_ID, text: caption, parse_mode: 'HTML' })
-  } else if (photoUrls.length === 1) {
-    await callTelegram('sendPhoto', {
-      chat_id: CHANNEL_CHAT_ID,
-      photo: photoUrls[0],
-      caption,
-      parse_mode: 'HTML',
-    })
-  } else {
-    await callTelegram('sendMediaGroup', {
-      chat_id: CHANNEL_CHAT_ID,
-      media: photoUrls.map((url, i) => ({
-        type: 'photo',
-        media: url,
-        ...(i === 0 ? { caption, parse_mode: 'HTML' } : {}),
-      })),
-    })
+  for (const chatId of CHANNEL_CHAT_IDS) {
+    if (photoUrls.length === 0) {
+      await callTelegram('sendMessage', { chat_id: chatId, text: caption, parse_mode: 'HTML' })
+    } else if (photoUrls.length === 1) {
+      await callTelegram('sendPhoto', {
+        chat_id: chatId,
+        photo: photoUrls[0],
+        caption,
+        parse_mode: 'HTML',
+      })
+    } else {
+      await callTelegram('sendMediaGroup', {
+        chat_id: chatId,
+        media: photoUrls.map((url, i) => ({
+          type: 'photo',
+          media: url,
+          ...(i === 0 ? { caption, parse_mode: 'HTML' } : {}),
+        })),
+      })
+    }
   }
 }
 
@@ -87,8 +108,22 @@ Deno.serve(async (req) => {
   const update = await req.json().catch(() => null)
   const callback = update?.callback_query
   if (!callback) {
-    // Не нажатие кнопки (например, обычное сообщение боту) — просто ок,
-    // Telegram ждёт 200, иначе будет повторять апдейт.
+    // Не нажатие кнопки. Отдельно обрабатываем /start — остальное (обычные
+    // сообщения боту) просто подтверждаем 200, иначе Telegram будет
+    // повторять апдейт.
+    const messageText: string = update?.message?.text ?? ''
+    if (messageText.split(' ')[0].split('@')[0] === '/start') {
+      await callTelegram('sendMessage', {
+        chat_id: update.message.chat.id,
+        text:
+          '👋 Привет! Это бот для поиска сожителей РАНХиГС.\n\n' +
+          'Заполни анкету — она откроется прямо в Telegram, займёт пару минут. ' +
+          'Нажми кнопку ниже, чтобы начать.',
+        reply_markup: {
+          inline_keyboard: [[{ text: '🏠 Открыть', web_app: { url: MINI_APP_URL } }]],
+        },
+      })
+    }
     return new Response('ok')
   }
 
@@ -155,7 +190,7 @@ Deno.serve(async (req) => {
     : [{ chat_id: clickedChatId, message_id: clickedMessageId }]
 
   const confirmationText =
-    status === 'approved' && CHANNEL_CHAT_ID
+    status === 'approved' && CHANNEL_CHAT_IDS.length > 0
       ? `${statusLabel} — ${moderatorName}\nОпубликована в канале ✅`
       : `${statusLabel} — ${moderatorName}`
 

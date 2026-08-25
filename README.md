@@ -9,8 +9,8 @@ Telegram Mini App (чистые HTML/CSS/JS, без фреймворков) — 
 - `supabase/functions/notify-moderator/` — Edge Function: при новой анкете
   шлёт её модератору в Telegram (фото + кнопки «Принять/Отклонить»)
 - `supabase/functions/telegram-webhook/` — Edge Function: обрабатывает
-  нажатия этих кнопок, обновляет статус анкеты в БД и публикует принятые
-  анкеты в канал
+  нажатия этих кнопок, обновляет статус анкеты в БД, публикует принятые
+  анкеты в каналы и отвечает на `/start` кнопкой открытия Mini App
 - `supabase/functions/_shared/` — общее форматирование анкеты в текст,
   используется обеими функциями
 
@@ -60,7 +60,7 @@ sequenceDiagram
     telegram-webhook->>DB: update status = approved/rejected
     telegram-webhook->>TG: убрать кнопки, отметить решение
     opt статус = approved
-        telegram-webhook->>TG: пост анкеты в канал (CHANNEL_CHAT_ID)
+        telegram-webhook->>TG: пост анкеты в каналы (CHANNEL_CHAT_IDS)
     end
     telegram-webhook-->>-TG: 200 ok
 ```
@@ -179,12 +179,15 @@ DevTools. Это нормально для Supabase: безопасность о
    MODERATOR_CHAT_IDS=123456789        # можно несколько через запятую
    WEBHOOK_SECRET=<случайная строка>   # для notify-moderator
    TELEGRAM_WEBHOOK_SECRET=<другая случайная строка>  # для telegram-webhook
-   CHANNEL_CHAT_ID=-100...             # id канала для принятых анкет (необязательно)
+   CHANNEL_CHAT_IDS=-100...,@username  # каналы для принятых анкет, через запятую (необязательно)
+   MINI_APP_URL=https://mrfl0x.github.io/TelApp/  # кнопка в /start (необязательно, есть значение по умолчанию)
    ```
-   Бот должен быть добавлен в канал администратором с правом «Публиковать
-   сообщения». Узнать numeric id приватного канала: переслать любой пост
-   из канала боту в личку и посмотреть `forward_from_chat.id` в апдейте
-   (через `getUpdates`, предварительно временно сняв вебхук `deleteWebhook`).
+   Каждый элемент `CHANNEL_CHAT_IDS` — либо numeric id канала, либо
+   `@username` публичного канала. Бот должен быть добавлен в каждый канал
+   администратором с правом «Публиковать сообщения». Узнать numeric id
+   приватного канала: переслать любой пост из канала боту в личку и
+   посмотреть `forward_from_chat.id` в апдейте (через `getUpdates`,
+   предварительно временно сняв вебхук `deleteWebhook`).
    (`SUPABASE_URL` и `SUPABASE_SERVICE_ROLE_KEY` Supabase прокидывает в
    Edge Functions сама — их задавать не нужно.)
 
@@ -202,7 +205,9 @@ DevTools. Это нормально для Supabase: безопасность о
 
 После этого на каждую новую анкету модератору будет приходить сообщение с
 фото и кнопками «✅ Принять» / «❌ Отклонить», а решение будет сохраняться в
-`roommate_applications.status`.
+`roommate_applications.status`. Также при команде `/start` в личке с ботом
+пользователь получит короткое приветствие с кнопкой «🏠 Открыть», которая
+открывает Mini App (`MINI_APP_URL`).
 
 ## Исходное ТЗ
 
