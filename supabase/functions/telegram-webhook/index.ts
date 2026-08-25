@@ -108,36 +108,23 @@ Deno.serve(async (req) => {
   const update = await req.json().catch(() => null)
   const callback = update?.callback_query
   if (!callback) {
-    // Не нажатие кнопки. Отдельно обрабатываем /start и /id — остальное
-    // (обычные сообщения боту) просто подтверждаем 200, иначе Telegram
-    // будет повторять апдейт.
+    // Не нажатие кнопки. Отдельно обрабатываем /start — остальное (обычные
+    // сообщения боту) просто подтверждаем 200, иначе Telegram будет
+    // повторять апдейт.
     const messageText: string = update?.message?.text ?? ''
     const command = messageText.split(' ')[0].split('@')[0]
     const chatId = update?.message?.chat?.id
 
     if (command === '/start' && chatId) {
-      // Показываем chat id прямо в приветствии — это тот самый id, который
-      // нужно давать в MODERATOR_CHAT_IDS, чтобы не искать его отдельно
-      // через @userinfobot.
       await callTelegram('sendMessage', {
         chat_id: chatId,
         text:
           '👋 Привет! Это бот для поиска сожителей РАНХиГС.\n\n' +
           'Заполни анкету — она откроется прямо в Telegram, займёт пару минут. ' +
-          'Нажми кнопку ниже, чтобы начать.\n\n' +
-          `Твой Telegram id: <code>${chatId}</code>`,
-        parse_mode: 'HTML',
+          'Нажми кнопку ниже, чтобы начать.',
         reply_markup: {
           inline_keyboard: [[{ text: '🏠 Открыть', web_app: { url: MINI_APP_URL } }]],
         },
-      })
-    } else if (command === '/id' && chatId) {
-      // Быстрый способ узнать/напомнить свой chat id, без всего остального
-      // текста из /start.
-      await callTelegram('sendMessage', {
-        chat_id: chatId,
-        text: `Твой Telegram id: <code>${chatId}</code>`,
-        parse_mode: 'HTML',
       })
     }
     return new Response('ok')

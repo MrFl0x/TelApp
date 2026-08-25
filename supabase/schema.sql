@@ -34,7 +34,7 @@ create table if not exists public.roommate_applications (
   cleanliness        text not null check (cleanliness in ('important', 'not_important')),
 
   -- Фотографии: сами файлы лежат в Storage-бакете `roommate-photos`,
-  -- здесь храним только их публичные URL (от 1 до 3 штук).
+  -- здесь храним только их публичные URL (от 1 до 5 штук).
   photo_urls         text[] not null default '{}',
 
   -- Дополнительные (необязательные) поля
@@ -68,8 +68,8 @@ create table if not exists public.roommate_applications (
   -- "От" не больше, чем "до"
   constraint budget_range_check check (budget_to is null or budget_to >= budget_from),
 
-  -- От 1 до 3 фото
-  constraint photo_count_range check (cardinality(photo_urls) between 1 and 3)
+  -- От 1 до 5 фото
+  constraint photo_count_range check (cardinality(photo_urls) between 1 and 5)
 );
 
 comment on table public.roommate_applications is 'Анкеты из Telegram Mini App "Анкета сожителя"';

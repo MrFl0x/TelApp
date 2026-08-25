@@ -5,9 +5,11 @@
 // Webhooks, см. README.md → "Настройка уведомлений модератору").
 //
 // Берёт данные новой анкеты, форматирует их в читаемый текст и через
-// Telegram Bot API шлёт модератору(ам) сообщение с фото анкеты и двумя
-// кнопками: "✅ Принять" / "❌ Отклонить". Нажатие кнопок обрабатывает
-// соседняя функция telegram-webhook.
+// Telegram Bot API шлёт модератору(ам) фото анкеты (одно — с подписью и
+// кнопками; несколько — альбомом с подписью на первом фото и кнопками в
+// отдельном сообщении сразу под альбомом, т.к. Telegram не разрешает
+// прикреплять кнопки к элементам альбома). Кнопки "✅ Принять" /
+// "❌ Отклонить" обрабатывает соседняя функция telegram-webhook.
 //
 // Переменные окружения (Project Settings → Edge Functions → Secrets):
 //   TELEGRAM_BOT_TOKEN  — токен бота от @BotFather
@@ -65,7 +67,6 @@ Deno.serve(async (req) => {
 
   const caption = formatApplicationCaption(record, 'Новая анкета сожителя')
   const photoUrls: string[] = record.photo_urls ?? []
-  const [firstPhoto, ...restPhotos] = photoUrls
 
   const keyboard = {
     inline_keyboard: [[
@@ -77,31 +78,61 @@ Deno.serve(async (req) => {
   const refs: { chat_id: number; message_id: number }[] = []
 
   for (const chatId of MODERATOR_CHAT_IDS) {
-    const result = firstPhoto
-      ? await callTelegram('sendPhoto', {
-          chat_id: chatId,
-          photo: firstPhoto,
-          caption,
-          parse_mode: 'HTML',
-          reply_markup: keyboard,
-        })
-      : await callTelegram('sendMessage', {
-          chat_id: chatId,
-          text: caption,
-          parse_mode: 'HTML',
-          reply_markup: keyboard,
-        })
+    if (photoUrls.length <= 1) {
+      // Без фото или с одним фото — кнопки вешаем прямо на это сообщение.
+      const result = photoUrls.length === 1
+        ? await callTelegram('sendPhoto', {
+            chat_id: chatId,
+            photo: photoUrls[0],
+            caption,
+            parse_mode: 'HTML',
+            reply_markup: keyboard,
+          })
+        : await callTelegram('sendMessage', {
+            chat_id: chatId,
+            text: caption,
+            parse_mode: 'HTML',
+            reply_markup: keyboard,
+          })
 
-    if (result.ok) {
-      refs.push({ chat_id: result.result.chat.id, message_id: result.result.message_id })
-    } else {
-      console.error(`Не удалось отправить анкету ${record.id} модератору ${chatId}`)
+      if (result.ok) {
+        refs.push({ chat_id: result.result.chat.id, message_id: result.result.message_id })
+      } else {
+        console.error(`Не удалось отправить анкету ${record.id} модератору ${chatId}`)
+      }
+      continue
     }
 
-    // Остальные фото — отдельными сообщениями без кнопок сразу следом,
-    // чтобы не упираться в лимит caption и не плодить кнопки на каждом фото.
-    for (const url of restPhotos) {
-      await callTelegram('sendPhoto', { chat_id: chatId, photo: url })
+    // Несколько фото — одним альбомом (подпись на первом), а кнопки —
+    // отдельным сообщением сразу за ним (Telegram не позволяет reply_markup
+    // на элементах sendMediaGroup), с reply_to_message_id на альбом, чтобы
+    // было видно, к какой анкете относятся кнопки.
+    const albumResult = await callTelegram('sendMediaGroup', {
+      chat_id: chatId,
+      media: photoUrls.map((url, i) => ({
+        type: 'photo',
+        media: url,
+        ...(i === 0 ? { caption, parse_mode: 'HTML' } : {}),
+      })),
+    })
+
+    if (!albumResult.ok) {
+      console.error(`Не удалось отправить альбом анкеты ${record.id} модератору ${chatId}`)
+      continue
+    }
+
+    const albumFirstMessageId = albumResult.result?.[0]?.message_id
+    const buttonsResult = await callTelegram('sendMessage', {
+      chat_id: chatId,
+      text: '👆 Решение по анкете выше',
+      ...(albumFirstMessageId ? { reply_to_message_id: albumFirstMessageId } : {}),
+      reply_markup: keyboard,
+    })
+
+    if (buttonsResult.ok) {
+      refs.push({ chat_id: buttonsResult.result.chat.id, message_id: buttonsResult.result.message_id })
+    } else {
+      console.error(`Не удалось отправить кнопки анкеты ${record.id} модератору ${chatId}`)
     }
   }
 

@@ -23,7 +23,7 @@ sequenceDiagram
     participant Storage as Supabase Storage<br/>(бакет roommate-photos)
     participant DB as Supabase Postgres<br/>(таблица roommate_applications)
 
-    U->>App: Заполняет анкету, выбирает 1–3 фото
+    U->>App: Заполняет анкету, выбирает 1–5 фото
     App->>App: Валидация полей и фото на клиенте
     U->>App: Нажимает MainButton «Отправить анкету»
     App->>Storage: upload() каждое фото (anon-ключ)
@@ -53,8 +53,8 @@ sequenceDiagram
     participant Mod as Модератор
 
     DB->>NM: Database Webhook (INSERT в roommate_applications)
-    NM->>TG: sendPhoto(caption, кнопки ✅/❌)
-    TG-->>Mod: Сообщение с анкетой
+    NM->>TG: sendPhoto/sendMediaGroup(caption) + кнопки ✅/❌
+    TG-->>Mod: Сообщение (или альбом) с анкетой
     Mod->>TG: Нажимает ✅ Принять / ❌ Отклонить
     TG->>+telegram-webhook: callback_query (webhook)
     telegram-webhook->>DB: update status = approved/rejected
@@ -124,7 +124,7 @@ DevTools. Это нормально для Supabase: безопасность о
   не добавите `SELECT`-политику.
 - ⚠️ **Но таблицу можно заспамить.** INSERT-политика проверяет только
   структуру данных (`CHECK`-constraints: диапазоны значений, длину строк,
-  1–3 фото), а не то, что запрос реально пришёл из вашей формы. Значит,
+  1–5 фото), а не то, что запрос реально пришёл из вашей формы. Значит,
   кто угодно может напрямую создавать фейковые анкеты или заливать
   произвольные картинки в Storage, минуя `index.html`.
 - ⚠️ **`telegram_user_id` / `telegram_username` не верифицируются.** Они
