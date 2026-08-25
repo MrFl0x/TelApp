@@ -42,7 +42,9 @@ export function formatApplicationCaption(
 
   const extras: string[] = []
   if (record.phone) extras.push(`📞 ${escapeHtml(record.phone)}`)
-  if (record.instagram) extras.push(`📷 ${escapeHtml(record.instagram)}`)
+  // <code> — иначе Telegram сам подсвечивает "@ник" как упоминание
+  // Telegram-пользователя, хотя это инстаграм-ник, а не тг-юзернейм.
+  if (record.instagram) extras.push(`📷 <code>${escapeHtml(record.instagram)}</code>`)
   if (record.vk) extras.push(`VK: ${escapeHtml(record.vk)}`)
   if (record.whatsapp) extras.push(`WhatsApp: ${escapeHtml(record.whatsapp)}`)
   if (extras.length) lines.push('', ...extras)
